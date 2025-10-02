@@ -1,0 +1,123 @@
+import { useState } from "react";
+
+function toBase64(a: ArrayBuffer) {
+  // encode ArrayBuffer -> base64 sans dépendance externe
+  let binary = "";
+  const bytes = new Uint8Array(a);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+  return typeof btoa !== "undefined" ? btoa(binary) : Buffer.from(binary, "binary").toString("base64");
+}
+
+export default function Home() {
+  const [cvText, setCvText] = useState("");
+  const [jobText, setJobText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [out, setOut] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setError(null);
+    setExtracting(true);
+    try {
+      const buf = await f.arrayBuffer();
+      const fileBase64 = toBase64(buf);
+      const r = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: f.name, fileBase64 }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "Extraction échouée");
+      setCvText(data.text); // on remplit automatiquement le champ CV
+    } catch (e: any) {
+      setError(e.message || "Erreur d'extraction");
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  async function handleGenerate() {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cvText, jobText }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "Erreur serveur");
+      setOut(data);
+    } catch (e: any) {
+      setError(e.message || "Erreur");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main>
+      <div className="h">
+        <h1>CV-IA — Générateur de candidatures</h1>
+        <span className="badge">Upload PDF/DOCX/TXT</span>
+      </div>
+
+      <div className="grid">
+        <div className="card">
+          <label>Votre CV (upload fichier ou collez du texte)</label>
+          {/* 👇 Nouveau : input fichier */}
+          <input type="file" accept=".pdf,.docx,.txt" onChange={handleFileChange} />
+          <small style={{ color: "#9aa5b1" }}>
+            {extracting ? "Extraction du texte..." : "Formats acceptés : PDF, DOCX, TXT"}
+          </small>
+          <textarea
+            rows={12}
+            value={cvText}
+            onChange={(e) => setCvText(e.target.value)}
+            placeholder="Le texte du CV s'affichera ici après extraction (ou collez-le manuellement)."
+            style={{ marginTop: 8 }}
+          />
+        </div>
+
+        <div className="card">
+          <label>Offre d'emploi (texte)</label>
+          <textarea
+            rows={12}
+            value={jobText}
+            onChange={(e) => setJobText(e.target.value)}
+            placeholder="Collez ici la description du poste..."
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
+        <button onClick={handleGenerate} disabled={loading || !cvText || !jobText}>
+          {loading ? "Génération en cours..." : "Générer CV + Lettre + Checklist"}
+        </button>
+      </div>
+
+      {error && <p style={{ color: "#fca5a5", marginTop: 10 }}>❌ {error}</p>}
+
+      {out && (
+        <section style={{ marginTop: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div className="card">
+            <h2>CV optimisé</h2>
+            <pre>{out.cvOptimise}</pre>
+          </div>
+          <div className="card">
+            <h2>Lettre de motivation</h2>
+            <pre>{out.lettre}</pre>
+          </div>
+          <div className="card" style={{ gridColumn: "1 / -1" }}>
+            <h2>Checklist d’entretien (et score ATS)</h2>
+            <pre>Score ATS estimé : {out.score}{"\n\n"}{out.checklist}</pre>
+          </div>
+        </section>
+      )}
+    </main>
+  );
+}
